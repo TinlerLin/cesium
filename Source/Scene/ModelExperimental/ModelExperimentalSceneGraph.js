@@ -1,5 +1,7 @@
 import buildDrawCommands from "./buildDrawCommands.js";
 import BoundingSphere from "../../Core/BoundingSphere.js";
+import Cartesian3 from "../../Core/Cartesian3.js";
+import Cartographic from "../../Core/Cartographic.js";
 import Check from "../../Core/Check.js";
 import clone from "../../Core/clone.js";
 import defaultValue from "../../Core/defaultValue.js";
@@ -12,6 +14,7 @@ import ModelExperimentalUtility from "./ModelExperimentalUtility.js";
 import ModelRenderResources from "./ModelRenderResources.js";
 import NodeRenderResources from "./NodeRenderResources.js";
 import PrimitiveRenderResources from "./PrimitiveRenderResources.js";
+import SceneMode from "../SceneMode.js";
 import RenderState from "../../Renderer/RenderState.js";
 
 /**
@@ -390,7 +393,63 @@ ModelExperimentalSceneGraph.prototype.update = function (frameState) {
   }
 };
 
-ModelExperimentalSceneGraph.prototype.updateModelMatrix = function () {
+const scratchBoundingSphere = new BoundingSphere();
+
+function scaleInPixels(positionWC, radius, frameState) {
+  const boundingSphere = scratchBoundingSphere;
+  boundingSphere.center = positionWC;
+  boundingSphere.radius = radius;
+  return frameState.camera.getPixelSize(
+    boundingSphere,
+    frameState.context.drawingBufferWidth,
+    frameState.context.drawingBufferHeight
+  );
+}
+
+const scratchPosition = new Cartesian3();
+const scratchCartographic = new Cartographic();
+
+function getScale(model, modelMatrix, boundingSphere, frameState) {
+  let scale = model.scale;
+
+  if (model.minimumPixelSize !== 0.0) {
+    // Compute size of bounding sphere in pixels
+    const context = frameState.context;
+    const maxPixelSize = Math.max(
+      context.drawingBufferWidth,
+      context.drawingBufferHeight
+    );
+    const position = scratchPosition;
+    position.x = modelMatrix[12];
+    position.y = modelMatrix[13];
+    position.z = modelMatrix[14];
+
+    // TODO: will _boundingSphere exist by the time this function is called?
+    const radius = boundingSphere.radius;
+    const metersPerPixel = scaleInPixels(position, radius, frameState);
+
+    // metersPerPixel is always > 0.0
+    const pixelsPerMeter = 1.0 / metersPerPixel;
+    const diameterInPixels = Math.min(
+      pixelsPerMeter * (2.0 * radius),
+      maxPixelSize
+    );
+
+    // Maintain model's minimum pixel size
+    if (diameterInPixels < model.minimumPixelSize) {
+      scale =
+        (model.minimumPixelSize * metersPerPixel) /
+        (2.0 * model._initialRadius);
+    }
+  }
+
+  return defined(model.maximumScale)
+    ? Math.min(model.maximumScale, scale)
+    : scale;
+}
+ModelExperimentalSceneGraph.prototype.updateModelMatrix = function (
+  frameState
+) {
   this._computedModelMatrix = Matrix4.clone(this._model.modelMatrix);
   Matrix4.multiply(
     this._computedModelMatrix,

@@ -46,6 +46,9 @@ import I3dmLoader from "./I3dmLoader.js";
  * @param {Number} [options.instanceFeatureIdIndex=0] The index into the list of instance feature IDs used for picking and styling. If both per-primitive and per-instance feature IDs are present, the instance feature IDs take priority.
  * @param {Object} [options.pointCloudShading] Options for constructing a {@link PointCloudShading} object to control point attenuation based on geometric error and lighting.
  * @param {Boolean} [options.backFaceCulling=true] Whether to cull back-facing geometry. When true, back face culling is determined by the material's doubleSided property; when false, back face culling is disabled. Back faces are not culled if the model's color is translucent.
+ * @param {Number} [options.scale=1.0] A uniform scale applied to this model.
+ * @param {Number} [option.minimumPixelSize=0.0] The approximate minimum pixel size of the model regardless of zoom.
+ * @param {Number} [options.maximumScale] The maximum scale size of a model. An upper limit for minimumPixelSize.
  * @experimental This feature is using part of the 3D Tiles spec that is not final and is subject to change without Cesium's standard deprecation policy.
  */
 export default function ModelExperimental(options) {
@@ -135,6 +138,7 @@ export default function ModelExperimental(options) {
   this._resources = [];
 
   this._boundingSphere = undefined;
+  this._initialRadius = undefined;
 
   const pointCloudShading = new PointCloudShading(options.pointCloudShading);
   this._attenuation = pointCloudShading.attenuation;
@@ -142,6 +146,15 @@ export default function ModelExperimental(options) {
 
   this._backFaceCulling = defaultValue(options.backFaceCulling, true);
   this._backFaceCullingDirty = false;
+
+  this._scale = defaultValue(options.scale, 1.0);
+  this._scaleDirty = false;
+
+  this._minimumPixelSize = defaultValue(options.minimumPixelSize, 0.0);
+  this._minimumPixelSizeDirty = false;
+
+  this._maximumScale = options.maximumScale;
+  this._maximumScaleDirty = false;
 
   this._debugShowBoundingVolumeDirty = false;
   this._debugShowBoundingVolume = defaultValue(
@@ -652,6 +665,70 @@ Object.defineProperties(ModelExperimental.prototype, {
       this._backFaceCulling = value;
     },
   },
+
+  /**
+   * A uniform scale applied to this model before the {@link ModelExperimental#modelMatrix}.
+   * Values greater than <code>1.0</code> increase the size of the model; values
+   * less than <code>1.0</code> decrease.
+   *
+   * @type {Number}
+   *
+   * @default 1.0
+   */
+  scale: {
+    get: function () {
+      return this._scale;
+    },
+    set: function (value) {
+      if (value !== this._scale) {
+        this._scaleDirty = true;
+      }
+
+      this._scale = value;
+    },
+  },
+
+  /**
+   * The approximate minimum pixel size of the model regardless of zoom.
+   * This can be used to ensure that a model is visible even when the viewer
+   * zooms out. When <code>0.0</code>, no minimum size is enforced.
+   *
+   * @type {Number}
+   *
+   * @default 0.0
+   */
+  minimumPixelSize: {
+    get: function () {
+      return this._minimumPixelSize;
+    },
+    set: function (value) {
+      if (value !== this._minimumPixelSize) {
+        this._minimumPixelSizeDirty = true;
+      }
+
+      this._minimumPixelSize = value;
+    },
+  },
+
+  /**
+   * The maximum scale size for a model. This can be used to give
+   * an upper limit to the {@link ModelExperimental#minimumPixelSize}, ensuring that the model
+   * is never an unreasonable scale.
+   *
+   * @type {Number}
+   */
+  maximumScale: {
+    get: function () {
+      return this._maximumScale;
+    },
+    set: function (value) {
+      if (value !== this._maximumScale) {
+        this._maximumScaleDirty = true;
+      }
+
+      this._maximumScale = value;
+    },
+  },
 });
 
 /**
@@ -741,8 +818,17 @@ ModelExperimental.prototype.update = function (frameState) {
     this._debugShowBoundingVolumeDirty = false;
   }
 
-  if (!Matrix4.equals(this.modelMatrix, this._modelMatrix)) {
-    this._sceneGraph.updateModelMatrix(this);
+  if (
+    !Matrix4.equals(this.modelMatrix, this._modelMatrix) ||
+    this._scaleDirty ||
+    this._minimumPixelSizeDirty ||
+    this._minimumPixelSize !== 0.0 || // Minimum pixel size changed or is enabled
+    this._maximumScaleDirty
+  ) {
+    this._sceneGraph.updateModelMatrix(frameState);
+    this._scaleDirty = false;
+    this._minimumPixelSizeDirty = false;
+    this._maximumScaleDirty = false;
   }
 
   if (this._backFaceCullingDirty) {
@@ -835,7 +921,7 @@ ModelExperimental.prototype.destroyResources = function () {
 /**
  * <p>
  * Creates a model from a glTF asset.  When the model is ready to render, i.e., when the external binary, image,
- * and shader files are downloaded and the WebGL resources are created, the {@link Model#readyPromise} is resolved.
+ * and shader files are downloaded and the WebGL resources are created, the {@link ModelExperimental#readyPromise} is resolved.
  * </p>
  * <p>
  * The model can be a traditional glTF asset with a .gltf extension or a Binary glTF using the .glb extension.
@@ -862,6 +948,9 @@ ModelExperimental.prototype.destroyResources = function () {
  * @param {Number} [options.instanceFeatureIdIndex=0] The index into the list of instance feature IDs used for picking and styling. If both per-primitive and per-instance feature IDs are present, the instance feature IDs take priority.
  * @param {Object} [options.pointCloudShading] Options for constructing a {@link PointCloudShading} object to control point attenuation and lighting.
  * @param {Boolean} [options.backFaceCulling=true] Whether to cull back-facing geometry. When true, back face culling is determined by the material's doubleSided property; when false, back face culling is disabled. Back faces are not culled if the model's color is translucent.
+ * @param {Number} [options.scale=1.0] A uniform scale applied to this model.
+ * @param {Number} [option.minimumPixelSize=0.0] The approximate minimum pixel size of the model regardless of zoom.
+ * @param {Number} [options.maximumScale] The maximum scale size of a model. An upper limit for minimumPixelSize.
  *
  * @returns {ModelExperimental} The newly created model.
  */
@@ -921,6 +1010,9 @@ ModelExperimental.fromGltf = function (options) {
     instanceFeatureIdIndex: options.instanceFeatureIdIndex,
     pointCloudShading: options.pointCloudShading,
     backFaceCulling: options.backFaceCulling,
+    scale: options.scale,
+    minimumPixelSize: options.minimumPixelSize,
+    maximumScale: options.maximumScale,
   };
   const model = new ModelExperimental(modelOptions);
 
